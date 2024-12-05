@@ -2,7 +2,7 @@
 
 # LTX-Video
 
-This is the official repository for LTX-Video.
+This is the repository for Q8 LTX-Video.
 
 [Website](https://www.lightricks.com/ltxv) |
 [Q8 Weights](https://huggingface.co/konakona/ltxvideo_q8) |
