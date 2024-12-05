@@ -4,7 +4,6 @@
 
 This is the repository for Q8 LTX-Video.
 
-[Website](https://www.lightricks.com/ltxv) |
 [Q8 Weights](https://huggingface.co/konakona/ltxvideo_q8) |
 [Original repo](https://github.com/Lightricks/LTX-Video) |
 
@@ -55,7 +54,7 @@ snapshot_download("konakona/ltxvideo_q8", local_dir=model_path, local_dir_use_sy
 
 ### Inference
 
-To use our model, please follow the inference code in [inference.py](./inference.py):
+follow the inference code in [inference.py](./inference.py):
 
 #### For text-to-video generation:
 
