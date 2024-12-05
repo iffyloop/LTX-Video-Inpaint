@@ -26,6 +26,8 @@ LTX-VideoQ8 is 8bit adaptation of LTXVideo(https://github.com/Lightricks/LTX-Vid
 
 ![Benchmarks](./docs/_static/output.png)
 
+121x720x1280*: in diffusers the more steps it makes the slower it/sec gets, expected ~7min not 9mins according to it/sec of first 10 steps.
+
 ## Run locally
 
 ### Installation
