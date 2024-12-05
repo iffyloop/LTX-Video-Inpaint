@@ -55,7 +55,7 @@ snapshot_download("konakona/ltxvideo_q8", local_dir=model_path, local_dir_use_sy
 
 ### Inference
 
-To use our model, please follow the inference code in [inference.py](./inference.py):
+follow the inference code in [inference.py](./inference.py):
 
 #### For text-to-video generation:
 
