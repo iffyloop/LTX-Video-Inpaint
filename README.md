@@ -33,9 +33,10 @@ LTX-VideoQ8 is 8bit adaptation of LTXVideo(https://github.com/Lightricks/LTX-Vid
 ### Installation
 The codebase was tested with Python 3.10.12, CUDA version 12.6, and supports PyTorch >= 2.5.1.
 
-Install q8_kernels(https://github.com/KONAKONA666/q8_kernels)
 
 ```bash
+1) Install q8_kernels(https://github.com/KONAKONA666/q8_kernels)
+
 git clone https://github.com/KONAKONA666/LTX-Video/tree/main
 cd LTX-Video
 
