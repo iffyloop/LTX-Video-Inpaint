@@ -1095,7 +1095,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                 vae_per_channel_normalize=kwargs["vae_per_channel_normalize"],
             )
             image = self.image_processor.postprocess(image, output_type=output_type)
-
         else:
             image = latents
 
