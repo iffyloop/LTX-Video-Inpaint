@@ -52,13 +52,13 @@ To use our model, please follow the inference code in [inference.py](./inference
 #### For text-to-video generation:
 
 ```bash
-python inference.py  --low_vram --ckpt_dir -transformer_type=q8_kernels 'PATH' --prompt "PROMPT" --height HEIGHT --width WIDTH --num_frames NUM_FRAMES --seed SEED
+python inference.py  --low_vram --transformer_type=q8_kernels --ckpt_dir  'PATH' --prompt "PROMPT" --height HEIGHT --width WIDTH --num_frames NUM_FRAMES --seed SEED
 ```
 
 #### For image-to-video generation:
 
 ```bash
-python inference.py --ckpt_dir 'PATH'  --low_vram --ckpt_dir -transformer_type=q8_kernels --prompt "PROMPT" --input_image_path IMAGE_PATH --height HEIGHT --width WIDTH --num_frames NUM_FRAMES --seed SEED
+python inference.py --ckpt_dir 'PATH'  --low_vram --transformer_type=q8_kernels --prompt "PROMPT" --input_image_path IMAGE_PATH --height HEIGHT --width WIDTH --num_frames NUM_FRAMES --seed SEED
 ```
 
 # Model User Guide
