@@ -71,13 +71,17 @@ python inference.py --ckpt_dir 'PATH'  --low_vram --transformer_type=q8_kernels 
 ### Comparision
 Left: 8bit, right 16bit
 
-![example1](./docs/_static/312661b4-974f-4db7-8e68-bc050debc782.gif)
+Find side to side comparisons in
+
+https://github.com/KONAKONA666/LTX-Video/tree/main/docs/_static 
+
+<!-- ![example1](./docs/_static/312661b4-974f-4db7-8e68-bc050debc782.gif)
 ![example2](./docs/_static/31632627-40ae-4dcf-aac9-99b70f908351.gif)
 ![example3](./docs/_static/62558328-6561-4486-9abe-4e13aa317577.gif)
 ![example4](./docs/_static/91d01bfa-e806-48b6-89b2-ed7a6733ac2f.gif)
 ![example5](./docs/_static/e37acb60-1f64-45b1-a8c1-4eff28af298a.gif)
 ![example5](./docs/_static/f989b225-8b82-4a2f-b119-91464803df95.gif)
-
+ -->
 
 
 # Model User Guide
