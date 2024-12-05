@@ -37,7 +37,7 @@ The codebase was tested with Python 3.10.12, CUDA version 12.6, and supports PyT
 ```bash
 1) Install q8_kernels(https://github.com/KONAKONA666/q8_kernels)
 
-git clone https://github.com/KONAKONA666/LTX-Video/tree/main
+2) git clone https://github.com/KONAKONA666/LTX-Video/tree/main
 cd LTX-Video
 
 python -m pip install -e .\[inference-script\]
