@@ -164,3 +164,4 @@ cython_debug/
 # From inference.py
 video_output_*.mp4
 outputs/
+*.ipynb
