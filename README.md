@@ -69,6 +69,18 @@ python inference.py  --low_vram --transformer_type=q8_kernels --ckpt_dir  'PATH'
 python inference.py --ckpt_dir 'PATH'  --low_vram --transformer_type=q8_kernels --prompt "PROMPT" --input_image_path IMAGE_PATH --height HEIGHT --width WIDTH --num_frames NUM_FRAMES --seed SEED
 ```
 
+### Comparision
+Left: 8bit, right 16bit
+
+![example1](./docs/_static/text-to-vid-0-a-clear-turquoise.mp4)
+![example2](./docs/_static/text-to-vid-0-a-woman-walks-away.mp4)
+![example3](./docs/_static/text-to-vid-0-a-woman-with-blond.mp4)
+![example4](./docs/_static/text-to-vid-0-a-woman-with-blood.mp4)
+![example5](./docs/_static/text-to-vid-0-a-woman-with-long.mp4)
+![example5](./docs/_static/text-to-vid-0-the-camera-pans-ov.mp4)
+
+
+
 # Model User Guide
 
 ## 📝 Prompt Engineering
