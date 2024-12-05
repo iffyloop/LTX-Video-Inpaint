@@ -5,9 +5,9 @@
 This is the official repository for LTX-Video.
 
 [Website](https://www.lightricks.com/ltxv) |
-[Model](https://huggingface.co/Lightricks/LTX-Video) |
-[Demo](https://fal.ai/models/fal-ai/ltx-video) |
-[Paper (Soon)](https://github.com/Lightricks/LTX-Video) 
+[Q8 Weights](https://huggingface.co/konakona/ltxvideo_q8) |
+[Original repo](https://github.com/Lightricks/LTX-Video) |
+
 
 </div>
 
@@ -19,7 +19,7 @@ This is the official repository for LTX-Video.
 
 # Introduction
 
-LTX-VideoQ8 is 8bit adaptation of LTXVideo(https://github.com/Lightricks/LTX-Video) with no loss of accuracy and up to 3X speed up in NVIDIA ADA GPUs 
+LTX-VideoQ8 is 8bit adaptation of LTXVideo(https://github.com/Lightricks/LTX-Video) with no loss of accuracy and up to 3X speed up in NVIDIA ADA GPUs. Generate 720x480x121 videos in under a minute on RTX 4060 Laptop GPU with 8GB VRAM. Training code coming soon! (8GB VRAM is MORE than enough to full fine tune 2B transformer on ADA GPU with precalculated latents)
 
 ## Run locally
 
