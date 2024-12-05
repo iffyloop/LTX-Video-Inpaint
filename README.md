@@ -89,6 +89,6 @@ When writing prompts, focus on detailed, chronological descriptions of actions a
 
 We are grateful for the following awesome projects when implementing LTX-Video:
 * [DiT](https://github.com/facebookresearch/DiT) and [PixArt-alpha](https://github.com/PixArt-alpha/PixArt-alpha): vision transformers for image generation.
-
+* [Lightricks](https://github.com/Lightricks/LTX-Video) for the model
 
 [//]: # (## Citation)
