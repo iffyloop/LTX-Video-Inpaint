@@ -13,16 +13,18 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from transformers import T5EncoderModel, T5Tokenizer
+from q8_kernels.models.LTXVideo import LTXTransformer3DModel
+from q8_kernels.graph.graph import make_dynamic_graphed_callable
 
 from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
 )
 from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
-from ltx_video.models.transformers.transformer3d import Transformer3DModel
 from ltx_video.pipelines.pipeline_ltx_video import LTXVideoPipeline
 from ltx_video.schedulers.rf import RectifiedFlowScheduler
 from ltx_video.utils.conditioning_method import ConditioningMethod
 
+from ltx_video.models.transformers.transformer3d import Transformer3DModel
 
 MAX_HEIGHT = 720
 MAX_WIDTH = 1280
@@ -42,15 +44,19 @@ def load_vae(vae_dir):
     return vae.to(torch.bfloat16)
 
 
-def load_unet(unet_dir):
-    unet_ckpt_path = unet_dir / "unet_diffusion_pytorch_model.safetensors"
-    unet_config_path = unet_dir / "config.json"
-    transformer_config = Transformer3DModel.load_config(unet_config_path)
-    transformer = Transformer3DModel.from_config(transformer_config)
-    unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
-    transformer.load_state_dict(unet_state_dict, strict=True)
-    if torch.cuda.is_available():
-        transformer = transformer.cuda()
+def load_unet(unet_path, type="q8_kernels"):
+    if type == "q8_kernels":
+        transformer = LTXTransformer3DModel.from_pretrained(unet_path)
+    else:
+        unet_ckpt_path = unet_path / "unet_diffusion_pytorch_model.safetensors"
+        unet_config_path = unet_path / "config.json"
+        transformer_config = Transformer3DModel.load_config(unet_config_path)
+        transformer = Transformer3DModel.from_config(transformer_config)
+        unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
+        transformer.load_state_dict(unet_state_dict, strict=True)
+        if torch.cuda.is_available():
+            transformer = transformer.cuda()
+
     return transformer
 
 
@@ -174,6 +180,11 @@ def main():
         help="Path to the directory containing unet, vae, and scheduler subdirectories",
     )
     parser.add_argument(
+        "--unet_path",
+        type=str,
+        default="konakona/ltxvideo_q8"
+    )
+    parser.add_argument(
         "--input_video_path",
         type=str,
         help="Path to the input video file (first frame used)",
@@ -227,12 +238,6 @@ def main():
         "--frame_rate", type=int, default=25, help="Frame rate for the output video"
     )
 
-    parser.add_argument(
-        "--bfloat16",
-        action="store_true",
-        help="Denoise in bfloat16",
-    )
-
     # Prompts
     parser.add_argument(
         "--prompt",
@@ -245,11 +250,21 @@ def main():
         default="worst quality, inconsistent motion, blurry, jittery, distorted",
         help="Negative prompt for undesired features",
     )
+    parser.add_argument(
+        "--low_vram",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--transformer_type",
+        default="q8_kernels",
+        choices=["q8_kernels", "diffusers"]
+    )
+    
 
     logger = logging.get_logger(__name__)
 
     args = parser.parse_args()
-
+    print(args.transformer_type)
     logger.warning(f"Running generation with arguments: {args}")
 
     seed_everething(args.seed)
@@ -298,26 +313,42 @@ def main():
 
     # Paths for the separate mode directories
     ckpt_dir = Path(args.ckpt_dir)
-    unet_dir = ckpt_dir / "unet"
+    if args.transformer_type == "q8_kernels":
+        unet_path = args.unet_path
+    elif args.transformer_type == "diffusers":
+        unet_path = ckpt_dir/"unet"
     vae_dir = ckpt_dir / "vae"
     scheduler_dir = ckpt_dir / "scheduler"
 
     # Load models
     vae = load_vae(vae_dir)
-    unet = load_unet(unet_dir)
+    unet = load_unet(unet_path, type=args.transformer_type)
     scheduler = load_scheduler(scheduler_dir)
     patchifier = SymmetricPatchifier(patch_size=1)
     text_encoder = T5EncoderModel.from_pretrained(
-        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder"
+        ckpt_dir, subfolder="text_encoder", torch_dtype=torch.bfloat16
     )
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and not args.low_vram:
         text_encoder = text_encoder.to("cuda")
+
     tokenizer = T5Tokenizer.from_pretrained(
         "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="tokenizer"
     )
 
-    if args.bfloat16 and unet.dtype != torch.bfloat16:
-        unet = unet.to(torch.bfloat16)
+    unet = unet.to(torch.bfloat16)
+    if args.transformer_type=="q8_kernels":
+        for b in unet.transformer_blocks:
+            b.to(dtype=torch.float)
+        
+        for n,m in unet.transformer_blocks.named_parameters():
+            if "scale_shift_table" in n:
+                m.data = m.data.to(torch.bfloat16)
+        
+        # unet = unet.cuda()
+        torch.cuda.synchronize()
+        unet.forward = make_dynamic_graphed_callable(unet.forward)
+    else:
+        pass
 
     # Use submodels for the pipeline
     submodel_dict = {
@@ -330,7 +361,7 @@ def main():
     }
 
     pipeline = LTXVideoPipeline(**submodel_dict)
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and not args.low_vram:
         pipeline = pipeline.to("cuda")
 
     # Prepare input for the pipeline
@@ -365,7 +396,9 @@ def main():
             if media_items is not None
             else ConditioningMethod.UNCONDITIONAL
         ),
-        mixed_precision=not args.bfloat16,
+        mixed_precision=False,
+        low_vram = args.low_vram,
+        transformer_type=args.transformer_type
     ).images
 
     # Crop the padded images to the desired resolution and number of frames

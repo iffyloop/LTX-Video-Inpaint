@@ -672,7 +672,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             num_patches // math.prod(self.patchifier.patch_size),
             num_latent_channels,
         )
-
+        device = generator.device
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
                 f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
@@ -762,6 +762,8 @@ class LTXVideoPipeline(DiffusionPipeline):
         clean_caption: bool = True,
         media_items: Optional[torch.FloatTensor] = None,
         mixed_precision: bool = False,
+        low_vram: bool = True,
+        transformer_type: str = "q8_kernels",
         **kwargs,
     ) -> Union[ImagePipelineOutput, Tuple]:
         """
@@ -862,7 +864,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         else:
             batch_size = prompt_embeds.shape[0]
 
-        device = self._execution_device
+        device = "cuda:0"
 
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
@@ -870,6 +872,10 @@ class LTXVideoPipeline(DiffusionPipeline):
         do_classifier_free_guidance = guidance_scale > 1.0
 
         # 3. Encode input prompt
+        if low_vram:
+            self.text_encoder = self.text_encoder.cuda()
+            torch.cuda.synchronize()
+
         (
             prompt_embeds,
             prompt_attention_mask,
@@ -887,12 +893,26 @@ class LTXVideoPipeline(DiffusionPipeline):
             negative_prompt_attention_mask=negative_prompt_attention_mask,
             clean_caption=clean_caption,
         )
+
         if do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
             prompt_attention_mask = torch.cat(
                 [negative_prompt_attention_mask, prompt_attention_mask], dim=0
             )
+        if transformer_type == "q8_kernels":
+            prompt_attention_mask = prompt_attention_mask.argmin(-1).int().squeeze()
+            prompt_attention_mask[prompt_attention_mask == 0] = 128
 
+
+        if low_vram:
+            self.text_encoder = self.text_encoder.cpu()
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        
+        if low_vram:
+            self.vae = self.vae.to(device)
+            self.transformer = self.transformer.to(device)
+            
         # 3b. Encode and prepare conditioning data
         self.video_scale_factor = self.video_scale_factor if is_video else 1
         conditioning_method = kwargs.get("conditioning_method", None)
@@ -943,7 +963,8 @@ class LTXVideoPipeline(DiffusionPipeline):
             timesteps,
             **retrieve_timesteps_kwargs,
         )
-
+        
+        timesteps = timesteps.to(device)
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
@@ -1011,22 +1032,15 @@ class LTXVideoPipeline(DiffusionPipeline):
                 if conditioning_mask is not None:
                     current_timestep = current_timestep * (1 - conditioning_mask)
                 # Choose the appropriate context manager based on `mixed_precision`
-                if mixed_precision:
-                    if "xla" in device.type:
-                        raise NotImplementedError(
-                            "Mixed precision is not supported yet on XLA devices."
-                        )
-
-                    context_manager = torch.autocast(device.type, dtype=torch.bfloat16)
-                else:
-                    context_manager = nullcontext()  # Dummy context manager
+                
+                context_manager = nullcontext()  # Dummy context manager
 
                 # predict noise model_output
                 with context_manager:
                     noise_pred = self.transformer(
-                        latent_model_input.to(self.transformer.dtype),
+                        latent_model_input.to(torch.bfloat16),
                         indices_grid,
-                        encoder_hidden_states=prompt_embeds.to(self.transformer.dtype),
+                        encoder_hidden_states=prompt_embeds.to(torch.bfloat16),
                         encoder_attention_mask=prompt_attention_mask,
                         timestep=current_timestep,
                         return_dict=False,
