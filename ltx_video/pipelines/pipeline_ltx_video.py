@@ -297,7 +297,7 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         # See Section 3.1. of the paper.
         # FIXME: to be configured in config not hardecoded. Fix in separate PR with rest of config
-        max_length = 128  # TPU supports only lengths multiple of 128
+        max_length = 512  # TPU supports only lengths multiple of 128
 
         if prompt_embeds is None:
             prompt = self._text_preprocessing(prompt, clean_caption=clean_caption)
@@ -901,7 +901,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             )
         if transformer_type == "q8_kernels":
             prompt_attention_mask = prompt_attention_mask.argmin(-1).int().squeeze()
-            prompt_attention_mask[prompt_attention_mask == 0] = 128
+            prompt_attention_mask[prompt_attention_mask == 0] = 512
 
 
         if low_vram:
