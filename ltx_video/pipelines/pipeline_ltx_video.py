@@ -792,6 +792,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         clean_caption: bool = True,
         media_items: Optional[torch.FloatTensor] = None,
+        media_items_mask: Optional[torch.FloatTensor] = None,
         decode_timestep: Union[List[float], float] = 0.0,
         decode_noise_scale: Optional[List[float]] = None,
         mixed_precision: bool = False,
@@ -968,6 +969,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         image_cond_noise_scale = kwargs.get("image_cond_noise_scale", 0.0)
         init_latents, conditioning_mask = self.prepare_conditioning(
             media_items,
+            media_items_mask,
             num_frames,
             height,
             width,
@@ -993,6 +995,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             latents=init_latents,
             latents_mask=conditioning_mask,
         )
+        assert init_latents.shape == latents.shape
         orig_conditiong_mask = conditioning_mask
         if conditioning_mask is not None and is_video:
             assert num_images_per_prompt == 1
@@ -1024,15 +1027,15 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                if conditioning_method == ConditioningMethod.FIRST_FRAME:
-                    latents = self.image_cond_noise_update(
-                        t,
-                        init_latents,
-                        latents,
-                        image_cond_noise_scale,
-                        orig_conditiong_mask,
-                        generator,
-                    )
+                # if conditioning_method == ConditioningMethod.FIRST_FRAME:
+                latents = self.image_cond_noise_update(
+                    t,
+                    init_latents,
+                    latents,
+                    image_cond_noise_scale,
+                    orig_conditiong_mask,
+                    generator,
+                )
 
                 latent_model_input = (
                     torch.cat([latents] * num_conds) if num_conds > 1 else latents
@@ -1214,6 +1217,7 @@ class LTXVideoPipeline(DiffusionPipeline):
     def prepare_conditioning(
         self,
         media_items: torch.Tensor,
+        media_items_mask: torch.Tensor,
         num_frames: int,
         height: int,
         width: int,
@@ -1236,8 +1240,11 @@ class LTXVideoPipeline(DiffusionPipeline):
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: the conditioning latents and the conditioning mask
         """
+
+        """
         if media_items is None or method == ConditioningMethod.UNCONDITIONAL:
             return None, None
+        """
 
         assert media_items.ndim == 5
         assert height == media_items.shape[-2] and width == media_items.shape[-1]
@@ -1249,6 +1256,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             vae_per_channel_normalize=vae_per_channel_normalize,
         ).float()
 
+        """
         init_len, target_len = (
             init_latents.shape[2],
             num_frames // self.video_scale_factor,
@@ -1261,12 +1269,21 @@ class LTXVideoPipeline(DiffusionPipeline):
             init_latents = init_latents.repeat(1, 1, repeat_factor, 1, 1)[
                 :, :, :target_len
             ]
+        """
 
         # Prepare the conditioning mask (1.0 = condition on this token)
+        """
         b, n, f, h, w = init_latents.shape
-        conditioning_mask = torch.zeros([b, 1, f, h, w], device=init_latents.device)
+        conditioning_mask = torch.ones(
+            [b, 1, f, h, w], device=init_latents.device
+        )  # torch.zeros([b, 1, f, h, w], device=init_latents.device)
+        """
+        conditioning_mask = 1 - media_items_mask
+        conditioning_mask = conditioning_mask.to(device=init_latents.device)
+        """
         if method == ConditioningMethod.FIRST_FRAME:
             conditioning_mask[:, :, 0] = 1.0
+        """
 
         # Patchify the init latents and the mask
         conditioning_mask = self.patchifier.patchify(conditioning_mask).squeeze(-1)
