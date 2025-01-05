@@ -29,5 +29,7 @@ dependencies = [
 inference-script = [
     "accelerate",
     "matplotlib",
-    "imageio[ffmpeg]"
+    "imageio[ffmpeg]",
+    "av",
+    "scikit-image"
 ]
