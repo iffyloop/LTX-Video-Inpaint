@@ -655,6 +655,26 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         return caption.strip()
 
+    def image_cond_noise_update(
+        self,
+        t,
+        init_latents,
+        latents,
+        noise_scale,
+        conditiong_mask,
+        generator,
+    ):
+        noise = randn_tensor(
+            latents.shape,
+            generator=generator,
+            device=latents.device,
+            dtype=latents.dtype,
+        )
+        latents = (init_latents + noise_scale * noise * (t**2)) * conditiong_mask[
+            ..., None
+        ] + latents * (1 - conditiong_mask[..., None])
+        return latents
+
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_latents
     def prepare_latents(
         self,
@@ -761,6 +781,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         clean_caption: bool = True,
         media_items: Optional[torch.FloatTensor] = None,
+        media_items_mask: Optional[torch.FloatTensor] = None,
         mixed_precision: bool = False,
         low_vram: bool = True,
         transformer_type: str = "q8_kernels",
@@ -903,28 +924,30 @@ class LTXVideoPipeline(DiffusionPipeline):
             prompt_attention_mask = prompt_attention_mask.argmin(-1).int().squeeze()
             prompt_attention_mask[prompt_attention_mask == 0] = 512
 
-
         if low_vram:
             self.text_encoder = self.text_encoder.cpu()
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
-        
+
         if low_vram:
             self.vae = self.vae.to(device)
             self.transformer = self.transformer.to(device)
-            
+
         # 3b. Encode and prepare conditioning data
         self.video_scale_factor = self.video_scale_factor if is_video else 1
         conditioning_method = kwargs.get("conditioning_method", None)
         vae_per_channel_normalize = kwargs.get("vae_per_channel_normalize", False)
+        image_cond_noise_scale = kwargs.get("image_cond_noise_scale", 0.0)
         init_latents, conditioning_mask = self.prepare_conditioning(
             media_items,
+            media_items_mask,
             num_frames,
             height,
             width,
             conditioning_method,
             vae_per_channel_normalize,
         )
+        assert init_latents.shape == latents.shape
 
         # 4. Prepare latents.
         latent_height = height // self.vae_scale_factor
@@ -944,6 +967,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             latents=init_latents,
             latents_mask=conditioning_mask,
         )
+        orig_conditioning_mask = conditioning_mask
         if conditioning_mask is not None and is_video:
             assert num_images_per_prompt == 1
             conditioning_mask = (
@@ -963,7 +987,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             timesteps,
             **retrieve_timesteps_kwargs,
         )
-        
+
         timesteps = timesteps.to(device)
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -975,6 +999,15 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                latents = self.image_cond_noise_update(
+                    t,
+                    init_latents,
+                    latents,
+                    image_cond_noise_scale,
+                    orig_conditioning_mask,
+                    generator,
+                )
+
                 latent_model_input = (
                     torch.cat([latents] * 2) if do_classifier_free_guidance else latents
                 )
@@ -1032,7 +1065,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                 if conditioning_mask is not None:
                     current_timestep = current_timestep * (1 - conditioning_mask)
                 # Choose the appropriate context manager based on `mixed_precision`
-                
+
                 context_manager = nullcontext()  # Dummy context manager
 
                 # predict noise model_output
@@ -1109,6 +1142,7 @@ class LTXVideoPipeline(DiffusionPipeline):
     def prepare_conditioning(
         self,
         media_items: torch.Tensor,
+        media_items_mask: torch.Tensor,
         num_frames: int,
         height: int,
         width: int,
@@ -1131,8 +1165,11 @@ class LTXVideoPipeline(DiffusionPipeline):
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: the conditioning latents and the conditioning mask
         """
+
+        """
         if media_items is None or method == ConditioningMethod.UNCONDITIONAL:
             return None, None
+        """
 
         assert media_items.ndim == 5
         assert height == media_items.shape[-2] and width == media_items.shape[-1]
@@ -1144,6 +1181,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             vae_per_channel_normalize=vae_per_channel_normalize,
         ).float()
 
+        """
         init_len, target_len = (
             init_latents.shape[2],
             num_frames // self.video_scale_factor,
@@ -1162,6 +1200,9 @@ class LTXVideoPipeline(DiffusionPipeline):
         conditioning_mask = torch.zeros([b, 1, f, h, w], device=init_latents.device)
         if method == ConditioningMethod.FIRST_FRAME:
             conditioning_mask[:, :, 0] = 1.0
+        """
+        conditioning_mask = 1 - media_items_mask
+        conditioning_mask = conditioning_mask.to(device=init_latents.device)
 
         # Patchify the init latents and the mask
         conditioning_mask = self.patchifier.patchify(conditioning_mask).squeeze(-1)
