@@ -20,10 +20,11 @@ def ltx_video_inpaint_models_setup(models_dir):
     )
     snapshot_download(
         "Lightricks/LTX-Video",
+        revision="af2c843632fc44500f8a468b50258d1d025cc1e0",
         local_dir=Path(models_dir) / "Lightricks--LTX-Video",
         local_dir_use_symlinks=False,
         repo_type="model",
-        allow_patterns=["text_encoder/**", "vae/**"],
+        allow_patterns=["text_encoder/**", "vae/**", "scheduler/**"],
     )
 
 
