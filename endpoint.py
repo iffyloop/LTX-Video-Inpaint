@@ -8,12 +8,11 @@ DISTRO = "ubuntu22.04"
 TAG = f"{CUDA_VERSION}-{FLAVOR}-{DISTRO}"
 
 cuda_dev_image = modal.Image.from_registry(
-    f"nvidia/cuda:{TAG}", add_python="3.10.5"
+    f"nvidia/cuda:{TAG}", add_python="3.11"
 ).entrypoint([])
 
 modal_image = (
-    modal.Image.debian_slim(python_version="3.10.5")
-    .apt_install("git", "ffmpeg")
+    cuda_dev_image.apt_install("git", "ffmpeg", "build-essential", "clang")
     .pip_install(
         "torch==2.4.1",  # We need to install torch before installing q8_kernels, otherwise q8_kernels won't be able to find torch when it tries to compile
         "diffusers>=0.28.2",
@@ -23,8 +22,11 @@ modal_image = (
         "einops>=0.8.0",
         "accelerate>=1.2.1",
         "av>=14.0.1",
+        "ninja>=1.11.1.3",
         "fastapi[standard]",
         "python-multipart",
+    )
+    .pip_install(
         "git+https://github.com/KONAKONA666/q8_kernels.git",
     )
     .env(
