@@ -4,7 +4,7 @@ from huggingface_hub import snapshot_download
 MODELS_DIR = "/root/models"
 
 
-def ltx_video_inpaint_models_setup(models_dir):
+def download_models(models_dir):
     snapshot_download(
         "konakona/ltxvideo_q8",
         local_dir=Path(models_dir) / "konakona--ltxvideo_q8",
@@ -29,4 +29,4 @@ def ltx_video_inpaint_models_setup(models_dir):
 
 
 if __name__ == "__main__":
-    ltx_video_inpaint_models_setup(MODELS_DIR)
+    download_models(MODELS_DIR)

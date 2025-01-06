@@ -16,6 +16,5 @@ dependencies = [
     "matplotlib",
     "imageio[ffmpeg]",
     "av",
-    "scikit-image",
     "modal"
 ]
