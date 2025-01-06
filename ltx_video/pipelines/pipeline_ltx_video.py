@@ -947,7 +947,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             conditioning_method,
             vae_per_channel_normalize,
         )
-        assert init_latents.shape == latents.shape
 
         # 4. Prepare latents.
         latent_height = height // self.vae_scale_factor
@@ -967,6 +966,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             latents=init_latents,
             latents_mask=conditioning_mask,
         )
+        assert init_latents.shape == latents.shape
         orig_conditioning_mask = conditioning_mask
         if conditioning_mask is not None and is_video:
             assert num_images_per_prompt == 1

@@ -9,8 +9,17 @@ import safetensors.torch
 import torch
 from PIL import Image
 from transformers import T5EncoderModel, T5Tokenizer
-from q8_kernels.models.LTXVideo import LTXTransformer3DModel
-from q8_kernels.graph.graph import make_dynamic_graphed_callable
+
+try:
+    from q8_kernels.models.LTXVideo import LTXTransformer3DModel
+    from q8_kernels.graph.graph import make_dynamic_graphed_callable
+
+    print("q8_kernels imported successfully!")
+except Exception:
+    import traceback
+
+    print("q8_kernels import failed:")
+    print(traceback.format_exc())
 
 from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
@@ -80,7 +89,7 @@ def seed_everything(seed: int):
 
 
 def load_video_to_tensor(video_filelike):
-    container = av.open(video_filelike)
+    container = av.open(video_filelike, "r")
     frames = []
     for frame in container.decode(video=0):
         frame = frame.to_ndarray(format="rgb24").astype(np.float32) / 127.5 - 1.0
@@ -93,13 +102,13 @@ def load_video_to_tensor(video_filelike):
 def load_video_mask_images_to_tensor(mask_filelike_list):
     images = []
     for mask_filelike in mask_filelike_list:
-        image = np.array(Image.open(mask_filelike))
+        image = np.array(Image.open(mask_filelike, "r"))
         image = np.mean(image, axis=2)
         image = image.reshape((image.shape[0], image.shape[1], 1))  # H, W -> H, W, C
         images.append(image.astype(np.float32) / 255)
     images = np.array(images)
     images = np.permute_dims(images, (3, 0, 1, 2))  # Permute F, H, W, C to C, F, H, W
-    return torch.tensors([images]).float()  # B, C, F, H, W
+    return torch.tensor([images]).float()  # B, C, F, H, W
 
 
 def init_pipeline():
@@ -212,16 +221,16 @@ def run_inference(
     out_video_np = (out_video_np * 255).astype(np.uint8)
     out_height, out_width = out_video_np.shape[1:3]
     out_bytesio = io.BytesIO()
-    out_container = av.open(out_bytesio, "w")
+    out_container = av.open(out_bytesio, "w", format="mp4")
     out_stream = out_container.add_stream("mpeg4", rate=frame_rate)
     out_stream.width = out_width
     out_stream.height = out_height
     out_stream.pix_fmt = "yuv420p"
-    for frame_i in out_video_np.shape[0]:
+    for frame_i in range(out_video_np.shape[0]):
         frame = av.VideoFrame.from_ndarray(out_video_np[frame_i], format="rgb24")
         for packet in out_stream.encode(frame):
             out_container.mux(packet)
     for packet in out_stream.encode():
         out_container.mux(packet)
     out_container.close()
-    return out_bytesio.getbuffer()
+    return out_bytesio.getvalue()

@@ -16,5 +16,6 @@ dependencies = [
     "matplotlib",
     "imageio[ffmpeg]",
     "av",
-    "modal"
+    "modal",
+    "fastapi[standard]",
 ]
