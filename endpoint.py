@@ -60,7 +60,7 @@ class LTXVideoInpaintServer:
     def enter(self):
         self.pipeline = init_pipeline()
 
-    @modal.web_endpoint()
+    @modal.web_endpoint(docs=True)
     def inference(
         self,
         init_video: UploadFile,
