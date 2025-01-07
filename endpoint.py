@@ -28,6 +28,7 @@ modal_image = (
         "ninja>=1.11.1.3",
         "fastapi[standard]>=0.115.6",
         "python-multipart>=0.0.20",
+        "beautifulsoup4>=4.12.3",
     )
     .pip_install(
         "git+https://github.com/KONAKONA666/q8_kernels.git",
@@ -78,6 +79,7 @@ class LTXVideoInpaintServer:
         num_inference_steps: Annotated[int, Form()],
         guidance_scale: Annotated[float, Form()],
         frame_rate: Annotated[int, Form()],
+        clean_caption: Annotated[bool, Form()],
         ffmpeg_container_format: Annotated[str, Form()],
         ffmpeg_stream_format: Annotated[str, Form()],
         ffmpeg_stream_pixel_format: Annotated[str, Form()],
@@ -105,6 +107,7 @@ class LTXVideoInpaintServer:
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             frame_rate=frame_rate,
+            clean_caption=clean_caption,
             ffmpeg_container_format=ffmpeg_container_format,
             ffmpeg_stream_format=ffmpeg_stream_format,
             ffmpeg_stream_pixel_format=ffmpeg_stream_pixel_format,

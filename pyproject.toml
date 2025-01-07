@@ -18,4 +18,5 @@ dependencies = [
     "av",
     "modal",
     "fastapi[standard]",
+    "beautifulsoup4",
 ]

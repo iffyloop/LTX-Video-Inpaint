@@ -96,7 +96,8 @@ def load_video_to_tensor(video_filelike):
         frames.append(frame)
     frames = np.array(frames)
     frames = np.permute_dims(frames, (3, 0, 1, 2))  # Permute F, H, W, C to C, F, H, W
-    return torch.tensor([frames]).float()  # B, C, F, H, W
+    frames = np.expand_dims(frames, axis=0)
+    return torch.tensor(frames).float()  # B, C, F, H, W
 
 
 def load_video_mask_images_to_tensor(mask_filelike_list):
@@ -108,7 +109,8 @@ def load_video_mask_images_to_tensor(mask_filelike_list):
         images.append(image.astype(np.float32) / 255)
     images = np.array(images)
     images = np.permute_dims(images, (3, 0, 1, 2))  # Permute F, H, W, C to C, F, H, W
-    return torch.tensor([images]).float()  # B, C, F, H, W
+    images = np.expand_dims(images, axis=0)
+    return torch.tensor(images).float()  # B, C, F, H, W
 
 
 def init_pipeline():
@@ -167,6 +169,7 @@ def run_inference(
     num_inference_steps: int = 20,
     guidance_scale: float = 3.0,
     frame_rate: int = 25,
+    clean_caption: bool = True,
     ffmpeg_container_format: str = "mp4",
     ffmpeg_stream_format: str = "libx264rgb",
     ffmpeg_stream_pixel_format: str = "rgb24",
@@ -217,6 +220,7 @@ def run_inference(
         mixed_precision=False,
         low_vram=LOW_VRAM,
         transformer_type=TRANSFORMER_TYPE,
+        clean_caption=clean_caption,
     ).images[0]
 
     out_video_np = (
