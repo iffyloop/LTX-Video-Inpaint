@@ -91,7 +91,8 @@ class LTXVideoInpaintServer:
             )
         if api_key != os.environ["LTXVI_API_KEY"]:
             raise HTTPException(
-                status_code=401, detail="Unauthorized - missing LTXVI_API_KEY field"
+                status_code=401,
+                detail="Unauthorized - incorrect or missing LTXVI_API_KEY field",
             )
 
         output_bytes = run_inference(
