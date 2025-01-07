@@ -29,6 +29,7 @@ modal_image = (
         "fastapi[standard]>=0.115.6",
         "python-multipart>=0.0.20",
         "beautifulsoup4>=4.12.3",
+        "ftfy>=6.3.1",
     )
     .pip_install(
         "git+https://github.com/KONAKONA666/q8_kernels.git",

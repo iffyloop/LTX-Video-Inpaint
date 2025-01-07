@@ -19,4 +19,5 @@ dependencies = [
     "modal",
     "fastapi[standard]",
     "beautifulsoup4",
+    "ftfy",
 ]
