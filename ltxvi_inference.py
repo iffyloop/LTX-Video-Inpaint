@@ -167,6 +167,10 @@ def run_inference(
     num_inference_steps: int = 20,
     guidance_scale: float = 3.0,
     frame_rate: int = 25,
+    ffmpeg_container_format: str = "mp4",
+    ffmpeg_stream_format: str = "libx264rgb",
+    ffmpeg_stream_pixel_format: str = "rgb24",
+    ffmpeg_stream_options_json: str = '{"crf":"0"}',
 ):
     seed_everything(seed)
 
@@ -221,11 +225,15 @@ def run_inference(
     out_video_np = (out_video_np * 255).astype(np.uint8)
     out_height, out_width = out_video_np.shape[1:3]
     out_bytesio = io.BytesIO()
-    out_container = av.open(out_bytesio, "w", format="mp4")
-    out_stream = out_container.add_stream("mpeg4", rate=frame_rate)
+    out_container = av.open(out_bytesio, "w", format=ffmpeg_container_format)
+    out_stream = out_container.add_stream(
+        ffmpeg_stream_format,
+        rate=frame_rate,
+        options=json.loads(ffmpeg_stream_options_json),
+    )
     out_stream.width = out_width
     out_stream.height = out_height
-    out_stream.pix_fmt = "yuv420p"
+    out_stream.pix_fmt = ffmpeg_stream_pixel_format
     for frame_i in range(out_video_np.shape[0]):
         frame = av.VideoFrame.from_ndarray(out_video_np[frame_i], format="rgb24")
         for packet in out_stream.encode(frame):

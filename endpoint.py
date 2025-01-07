@@ -1,5 +1,6 @@
+import os
 import modal
-from fastapi import UploadFile, Form, Response
+from fastapi import UploadFile, Form, Response, HTTPException
 from typing import Annotated
 
 
@@ -55,6 +56,7 @@ with modal_image.imports():
             "ltx-video-inpaint-models", create_if_missing=True
         )
     },
+    secrets=[modal.Secret.from_name("LTXVI_API_KEY")],
 )
 class LTXVideoInpaintServer:
     @modal.build()
@@ -76,7 +78,22 @@ class LTXVideoInpaintServer:
         num_inference_steps: Annotated[int, Form()],
         guidance_scale: Annotated[float, Form()],
         frame_rate: Annotated[int, Form()],
+        ffmpeg_container_format: Annotated[str, Form()],
+        ffmpeg_stream_format: Annotated[str, Form()],
+        ffmpeg_stream_pixel_format: Annotated[str, Form()],
+        ffmpeg_stream_options_json: Annotated[str, Form()],
+        api_key: Annotated[str, Form()],
     ):
+        if not "LTXVI_API_KEY" in os.environ:
+            raise HTTPException(
+                status_code=500,
+                detail="Please define the LTXVI_API_KEY environment variable and import the corresponding Modal secret",
+            )
+        if api_key != os.environ["LTXVI_API_KEY"]:
+            raise HTTPException(
+                status_code=401, detail="Unauthorized - missing LTXVI_API_KEY field"
+            )
+
         output_bytes = run_inference(
             pipeline=self.pipeline,
             init_video_filelike=init_video.file,
@@ -87,6 +104,10 @@ class LTXVideoInpaintServer:
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             frame_rate=frame_rate,
+            ffmpeg_container_format=ffmpeg_container_format,
+            ffmpeg_stream_format=ffmpeg_stream_format,
+            ffmpeg_stream_pixel_format=ffmpeg_stream_pixel_format,
+            ffmpeg_stream_options_json=ffmpeg_stream_options_json,
         )
 
         return Response(content=output_bytes, media_type="video/mp4")
