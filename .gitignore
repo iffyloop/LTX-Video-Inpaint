@@ -162,7 +162,7 @@ cython_debug/
 .idea/
 
 # VS Code
-.vscode
+.vscode/
 
 # OS
 .DS_Store
