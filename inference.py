@@ -593,34 +593,38 @@ def infer(
     device = device or get_device()
     generator = torch.Generator(device=device).manual_seed(seed)
 
-    images = pipeline(
-        num_inference_steps=num_inference_steps,
-        num_images_per_prompt=num_images_per_prompt,
-        guidance_scale=guidance_scale,
-        skip_layer_strategy=skip_layer_strategy,
-        skip_block_list=skip_block_list,
-        stg_scale=stg_scale,
-        do_rescaling=stg_rescale != 1,
-        rescaling_scale=stg_rescale,
-        generator=generator,
-        output_type="pt",
-        callback_on_step_end=None,
-        height=height_padded,
-        width=width_padded,
-        num_frames=num_frames_padded,
-        frame_rate=frame_rate,
+    pipeline_args = {
+        "num_inference_steps": num_inference_steps,
+        "num_images_per_prompt": num_images_per_prompt,
+        "guidance_scale": guidance_scale,
+        "skip_layer_strategy": skip_layer_strategy,
+        "skip_block_list": skip_block_list,
+        "stg_scale": stg_scale,
+        "do_rescaling": stg_rescale != 1,
+        "rescaling_scale": stg_rescale,
+        "generator": generator,
+        "output_type": "pt",
+        "callback_on_step_end": None,
+        "height": height_padded,
+        "width": width_padded,
+        "num_frames": num_frames_padded,
+        "frame_rate": frame_rate,
         **sample,
-        conditioning_items=conditioning_items,
-        is_video=True,
-        vae_per_channel_normalize=True,
-        image_cond_noise_scale=image_cond_noise_scale,
-        decode_timestep=decode_timestep,
-        decode_noise_scale=decode_noise_scale,
-        mixed_precision=(precision == "mixed_precision"),
-        offload_to_cpu=offload_to_cpu,
-        device=device,
-        enhance_prompt=enhance_prompt,
-    ).images
+        "conditioning_items": conditioning_items,
+        "is_video": True,
+        "vae_per_channel_normalize": True,
+        "image_cond_noise_scale": image_cond_noise_scale,
+        "decode_timestep": decode_timestep,
+        "decode_noise_scale": decode_noise_scale,
+        "mixed_precision": (precision == "mixed_precision"),
+        "offload_to_cpu": offload_to_cpu,
+        "device": device,
+        "enhance_prompt": enhance_prompt,
+    }
+
+    pipeline.update_prompt(**pipeline_args)
+    pipeline.update_conditioning(**pipeline_args)
+    images = pipeline(**pipeline_args).images
 
     # Crop the padded images to the desired resolution and number of frames
     (pad_left, pad_right, pad_top, pad_bottom) = padding

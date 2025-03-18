@@ -764,6 +764,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             deprecate("mask_feature", "1.0.0", deprecation_message, standard_warn=False)
 
         is_video = kwargs.get("is_video", False)
+        """
         self.check_inputs(
             prompt,
             height,
@@ -774,6 +775,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             prompt_attention_mask,
             negative_prompt_attention_mask,
         )
+        """
 
         if kwargs.get("media_items", None) is not None:
             # Backwards compatibility mode for first-frame conditioning
@@ -810,109 +812,21 @@ class LTXVideoPipeline(DiffusionPipeline):
                 batch_size, num_conds, 2, skip_block_list
             )
 
-        if enhance_prompt:
-            self.prompt_enhancer_image_caption_model = (
-                self.prompt_enhancer_image_caption_model.to(self._execution_device)
-            )
-            self.prompt_enhancer_llm_model = self.prompt_enhancer_llm_model.to(
-                self._execution_device
-            )
-
-            prompt = generate_cinematic_prompt(
-                self.prompt_enhancer_image_caption_model,
-                self.prompt_enhancer_image_caption_processor,
-                self.prompt_enhancer_llm_model,
-                self.prompt_enhancer_llm_tokenizer,
-                prompt,
-                conditioning_items,
-                max_new_tokens=text_encoder_max_tokens,
-            )
-
-        # 3. Encode input prompt
-        if self.text_encoder is not None:
-            self.text_encoder = self.text_encoder.to(self._execution_device)
-
-        (
-            prompt_embeds,
-            prompt_attention_mask,
-            negative_prompt_embeds,
-            negative_prompt_attention_mask,
-        ) = self.encode_prompt(
-            prompt,
-            do_classifier_free_guidance,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            device=device,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            prompt_attention_mask=prompt_attention_mask,
-            negative_prompt_attention_mask=negative_prompt_attention_mask,
-            text_encoder_max_tokens=text_encoder_max_tokens,
-        )
-
-        if offload_to_cpu and self.text_encoder is not None:
-            self.text_encoder = self.text_encoder.cpu()
-
         self.transformer = self.transformer.to(self._execution_device)
 
-        prompt_embeds_batch = prompt_embeds
-        prompt_attention_mask_batch = prompt_attention_mask
-        if do_classifier_free_guidance:
-            prompt_embeds_batch = torch.cat(
-                [negative_prompt_embeds, prompt_embeds], dim=0
-            )
-            prompt_attention_mask_batch = torch.cat(
-                [negative_prompt_attention_mask, prompt_attention_mask], dim=0
-            )
-        if do_spatio_temporal_guidance:
-            prompt_embeds_batch = torch.cat([prompt_embeds_batch, prompt_embeds], dim=0)
-            prompt_attention_mask_batch = torch.cat(
-                [
-                    prompt_attention_mask_batch,
-                    prompt_attention_mask,
-                ],
-                dim=0,
-            )
+        prompt_embeds_batch = self.cached_prompt_embeds_batch
+        prompt_attention_mask_batch = self.cached_prompt_attention_mask_batch
 
         # 3b. Encode and prepare conditioning data
-        self.video_scale_factor = self.video_scale_factor if is_video else 1
-        vae_per_channel_normalize = kwargs.get("vae_per_channel_normalize", False)
         image_cond_noise_scale = kwargs.get("image_cond_noise_scale", 0.0)
 
         # 4. Prepare latents.
         latent_height = height // self.vae_scale_factor
         latent_width = width // self.vae_scale_factor
-        latent_num_frames = num_frames // self.video_scale_factor
-        if isinstance(self.vae, CausalVideoAutoencoder) and is_video:
-            latent_num_frames += 1
-        latent_shape = (
-            batch_size * num_images_per_prompt,
-            self.transformer.config.in_channels,
-            latent_num_frames,
-            latent_height,
-            latent_width,
-        )
-
-        # Prepare the initial random latents tensor, shape = (b, c, f, h, w)
-        latents = self.prepare_latents(
-            latent_shape=latent_shape,
-            dtype=prompt_embeds_batch.dtype,
-            device=device,
-            generator=generator,
-        )
-
-        # Update the latents with the conditioning items and patchify them into (b, n, c)
-        latents, pixel_coords, conditioning_mask, num_cond_latents = (
-            self.prepare_conditioning(
-                conditioning_items=conditioning_items,
-                init_latents=latents,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                vae_per_channel_normalize=vae_per_channel_normalize,
-                generator=generator,
-            )
-        )
+        latents = self.cached_latents
+        pixel_coords = self.cached_pixel_coords
+        conditioning_mask = self.cached_conditioning_mask
+        num_cond_latents = self.cached_num_cond_latents
         init_latents = latents.clone()  # Used for image_cond_noise_update
 
         pixel_coords = torch.cat([pixel_coords] * num_conds)
@@ -1127,6 +1041,219 @@ class LTXVideoPipeline(DiffusionPipeline):
             return (image,)
 
         return ImagePipelineOutput(images=image)
+
+    @torch.no_grad()
+    def update_prompt(
+        self,
+        height: int,
+        width: int,
+        num_frames: int,
+        frame_rate: float,
+        prompt: Union[str, List[str]] = None,
+        negative_prompt: str = "",
+        num_inference_steps: int = 20,
+        timesteps: List[int] = None,
+        guidance_scale: float = 4.5,
+        skip_layer_strategy: Optional[SkipLayerStrategy] = None,
+        skip_block_list: Optional[List[int]] = None,
+        stg_scale: float = 1.0,
+        do_rescaling: bool = True,
+        rescaling_scale: float = 0.7,
+        num_images_per_prompt: Optional[int] = 1,
+        eta: float = 0.0,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.FloatTensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        prompt_attention_mask: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_attention_mask: Optional[torch.FloatTensor] = None,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True,
+        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
+        conditioning_items: Optional[List[ConditioningItem]] = None,
+        decode_timestep: Union[List[float], float] = 0.0,
+        decode_noise_scale: Optional[List[float]] = None,
+        mixed_precision: bool = False,
+        offload_to_cpu: bool = False,
+        enhance_prompt: bool = False,
+        text_encoder_max_tokens: int = 256,
+        **kwargs,
+    ):
+        self.check_inputs(
+            prompt,
+            height,
+            width,
+            negative_prompt,
+            prompt_embeds,
+            negative_prompt_embeds,
+            prompt_attention_mask,
+            negative_prompt_attention_mask,
+        )
+
+        device = self._execution_device
+
+        # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
+        # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
+        # corresponds to doing no classifier free guidance.
+        do_classifier_free_guidance = guidance_scale > 1.0
+        do_spatio_temporal_guidance = stg_scale > 0.0
+
+        if enhance_prompt:
+            self.prompt_enhancer_image_caption_model = (
+                self.prompt_enhancer_image_caption_model.to(self._execution_device)
+            )
+            self.prompt_enhancer_llm_model = self.prompt_enhancer_llm_model.to(
+                self._execution_device
+            )
+
+            prompt = generate_cinematic_prompt(
+                self.prompt_enhancer_image_caption_model,
+                self.prompt_enhancer_image_caption_processor,
+                self.prompt_enhancer_llm_model,
+                self.prompt_enhancer_llm_tokenizer,
+                prompt,
+                conditioning_items,
+                max_new_tokens=text_encoder_max_tokens,
+            )
+
+        # 3. Encode input prompt
+        if self.text_encoder is not None:
+            self.text_encoder = self.text_encoder.to(self._execution_device)
+
+        (
+            prompt_embeds,
+            prompt_attention_mask,
+            negative_prompt_embeds,
+            negative_prompt_attention_mask,
+        ) = self.encode_prompt(
+            prompt,
+            do_classifier_free_guidance,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            device=device,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            prompt_attention_mask=prompt_attention_mask,
+            negative_prompt_attention_mask=negative_prompt_attention_mask,
+            text_encoder_max_tokens=text_encoder_max_tokens,
+        )
+
+        if offload_to_cpu and self.text_encoder is not None:
+            self.text_encoder = self.text_encoder.cpu()
+
+        prompt_embeds_batch = prompt_embeds
+        prompt_attention_mask_batch = prompt_attention_mask
+        if do_classifier_free_guidance:
+            prompt_embeds_batch = torch.cat(
+                [negative_prompt_embeds, prompt_embeds], dim=0
+            )
+            prompt_attention_mask_batch = torch.cat(
+                [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+            )
+        if do_spatio_temporal_guidance:
+            prompt_embeds_batch = torch.cat([prompt_embeds_batch, prompt_embeds], dim=0)
+            prompt_attention_mask_batch = torch.cat(
+                [
+                    prompt_attention_mask_batch,
+                    prompt_attention_mask,
+                ],
+                dim=0,
+            )
+
+        self.cached_prompt_embeds_batch = prompt_embeds_batch
+        self.cached_prompt_attention_mask_batch = prompt_attention_mask_batch
+
+    @torch.no_grad()
+    def update_conditioning(
+        self,
+        height: int,
+        width: int,
+        num_frames: int,
+        frame_rate: float,
+        prompt: Union[str, List[str]] = None,
+        negative_prompt: str = "",
+        num_inference_steps: int = 20,
+        timesteps: List[int] = None,
+        guidance_scale: float = 4.5,
+        skip_layer_strategy: Optional[SkipLayerStrategy] = None,
+        skip_block_list: Optional[List[int]] = None,
+        stg_scale: float = 1.0,
+        do_rescaling: bool = True,
+        rescaling_scale: float = 0.7,
+        num_images_per_prompt: Optional[int] = 1,
+        eta: float = 0.0,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.FloatTensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        prompt_attention_mask: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_attention_mask: Optional[torch.FloatTensor] = None,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True,
+        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
+        conditioning_items: Optional[List[ConditioningItem]] = None,
+        decode_timestep: Union[List[float], float] = 0.0,
+        decode_noise_scale: Optional[List[float]] = None,
+        mixed_precision: bool = False,
+        offload_to_cpu: bool = False,
+        enhance_prompt: bool = False,
+        text_encoder_max_tokens: int = 256,
+        **kwargs,
+    ):
+        device = self._execution_device
+
+        is_video = kwargs.get("is_video", False)
+
+        if prompt is not None and isinstance(prompt, str):
+            batch_size = 1
+        elif prompt is not None and isinstance(prompt, list):
+            batch_size = len(prompt)
+        else:
+            batch_size = prompt_embeds.shape[0]
+
+        prompt_embeds_batch = self.cached_prompt_embeds_batch
+
+        self.video_scale_factor = self.video_scale_factor if is_video else 1
+        vae_per_channel_normalize = kwargs.get("vae_per_channel_normalize", False)
+
+        latent_height = height // self.vae_scale_factor
+        latent_width = width // self.vae_scale_factor
+        latent_num_frames = num_frames // self.video_scale_factor
+        if isinstance(self.vae, CausalVideoAutoencoder) and is_video:
+            latent_num_frames += 1
+        latent_shape = (
+            batch_size * num_images_per_prompt,
+            self.transformer.config.in_channels,
+            latent_num_frames,
+            latent_height,
+            latent_width,
+        )
+
+        # Prepare the initial random latents tensor, shape = (b, c, f, h, w)
+        latents = self.prepare_latents(
+            latent_shape=latent_shape,
+            dtype=prompt_embeds_batch.dtype,
+            device=device,
+            generator=generator,
+        )
+
+        # Update the latents with the conditioning items and patchify them into (b, n, c)
+        latents, pixel_coords, conditioning_mask, num_cond_latents = (
+            self.prepare_conditioning(
+                conditioning_items=conditioning_items,
+                init_latents=latents,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                vae_per_channel_normalize=vae_per_channel_normalize,
+                generator=generator,
+            )
+        )
+
+        self.cached_latents = latents
+        self.cached_pixel_coords = pixel_coords
+        self.cached_conditioning_mask = conditioning_mask
+        self.cached_num_cond_latents = num_cond_latents
 
     def denoising_step(
         self,
