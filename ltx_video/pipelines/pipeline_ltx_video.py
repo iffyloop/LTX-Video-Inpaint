@@ -168,12 +168,12 @@ class ConditioningItem:
     Attributes:
         media_item (torch.Tensor), shape=(b, 3, f, h, w): The media item to condition on.
         media_frame_number (int): The start-frame number of the media item in the generated video.
-        conditioning_strength (float): The strength of the conditioning (1.0 = full conditioning).
+        conditioning_strength_mask (float): The strength of the conditioning for each latent (1.0 = full conditioning).
     """
 
     media_item: torch.Tensor
     media_frame_number: int
-    conditioning_strength: float
+    conditioning_strength_mask: torch.Tensor
 
 
 class LTXVideoPipeline(DiffusionPipeline):
@@ -1330,25 +1330,23 @@ class LTXVideoPipeline(DiffusionPipeline):
         """
         assert isinstance(self.vae, CausalVideoAutoencoder)
 
+        latent_height = height // self.vae_scale_factor
+        latent_width = width // self.vae_scale_factor
+
         if conditioning_items:
             batch_size, _, num_latent_frames = init_latents.shape[:3]
             # Initialize the conditioning mask
             conditioning_latent_frames_mask = torch.zeros(
-                (batch_size, num_latent_frames),
+                (batch_size, 1, num_latent_frames, latent_height, latent_width),
                 dtype=torch.float32,
                 device=init_latents.device,
             )
-
-            extra_conditioning_latents = []
-            extra_conditioning_pixel_coords = []
-            extra_conditioning_mask = []
-            extra_conditioning_num_latents = 0  # Number of extra conditioning latents added (should be removed before decoding)
 
             # Process each conditioning item
             for conditioning_item in conditioning_items:
                 media_item = conditioning_item.media_item
                 media_frame_number = conditioning_item.media_frame_number
-                strength = conditioning_item.conditioning_strength
+                strength = conditioning_item.conditioning_strength_mask
                 assert media_item.ndim == 5  # (b, c, f, h, w)
                 b, c, n_frames, h, w = media_item.shape
                 assert height == h and width == w
@@ -1372,7 +1370,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                     init_latents[:, :, :f_l] = torch.lerp(
                         init_latents[:, :, :f_l], latents, strength
                     )
-                    conditioning_latent_frames_mask[:, :f_l] = strength
+                    conditioning_latent_frames_mask[:, :, :f_l] = strength
                 else:
                     # Non-first frame or sequence
                     if n_frames > 1:
@@ -1385,43 +1383,13 @@ class LTXVideoPipeline(DiffusionPipeline):
                                 latents,
                                 media_frame_number,
                                 strength,
+                                num_prefix_latent_frames=1,
+                                prefix_latents_mode="drop",
                             )
                         )
 
                     if latents is not None:  # Single frame or sequence-prefix latents
-                        noise = randn_tensor(
-                            latents.shape,
-                            generator=generator,
-                            device=latents.device,
-                            dtype=latents.dtype,
-                        )
-
-                        latents = torch.lerp(noise, latents, strength)
-
-                        # Patchify the extra conditioning latents and calculate their pixel coordinates
-                        latents, latent_coords = self.patchifier.patchify(
-                            latents=latents
-                        )
-                        pixel_coords = latent_to_pixel_coords(
-                            latent_coords,
-                            self.vae,
-                            causal_fix=self.transformer.config.causal_temporal_positioning,
-                        )
-
-                        # Update the frame numbers to match the target frame number
-                        pixel_coords[:, 0] += media_frame_number
-                        extra_conditioning_num_latents += latents.shape[1]
-
-                        conditioning_mask = torch.full(
-                            latents.shape[:2],
-                            strength,
-                            dtype=torch.float32,
-                            device=conditioning_latent_frames_mask.device,
-                        )
-
-                        extra_conditioning_latents.append(latents)
-                        extra_conditioning_pixel_coords.append(pixel_coords)
-                        extra_conditioning_mask.append(conditioning_mask)
+                        raise Exception("This prefix_latents_mode is not supported")
 
         # Patchify the updated latents and calculate their pixel coordinates
         init_latents, init_latent_coords = self.patchifier.patchify(
@@ -1433,29 +1401,15 @@ class LTXVideoPipeline(DiffusionPipeline):
             causal_fix=self.transformer.config.causal_temporal_positioning,
         )
 
-        if not conditioning_items:
-            return init_latents, init_pixel_coords, None, 0
-
-        # Create a per-token mask based on the updated conditioning_latent_frames_mask
-        init_conditioning_mask = conditioning_latent_frames_mask.gather(
-            1, init_latent_coords[:, 0]
+        patchified_conditioning_mask, _ = self.patchifier.patchify(
+            latents=conditioning_latent_frames_mask
         )
-
-        if extra_conditioning_latents:
-            # Stack the extra conditioning latents, pixel coordinates and mask
-            init_latents = torch.cat([*extra_conditioning_latents, init_latents], dim=1)
-            init_pixel_coords = torch.cat(
-                [*extra_conditioning_pixel_coords, init_pixel_coords], dim=2
-            )
-            init_conditioning_mask = torch.cat(
-                [*extra_conditioning_mask, init_conditioning_mask], dim=1
-            )
 
         return (
             init_latents,
             init_pixel_coords,
-            init_conditioning_mask,
-            extra_conditioning_num_latents,
+            patchified_conditioning_mask.squeeze(-1),
+            0,
         )
 
     @staticmethod
@@ -1464,7 +1418,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         conditioning_latent_frames_mask: torch.Tensor,
         latents: torch.Tensor,
         media_frame_number: int,
-        strength: float,
+        strength: torch.Tensor,
         num_prefix_latent_frames: int = 2,
         prefix_latents_mode: str = "concat",
         prefix_soft_conditioning_strength: float = 0.15,
@@ -1479,7 +1433,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                 latent token.
             latents (torch.Tensor): The encoded conditioning item.
             media_frame_number (int): The target frame number of the first frame in the conditioning sequence.
-            strength (float): The conditioning strength for the conditioning latents.
+            strength (torch.Tensor): The conditioning strength for each latent.
             num_prefix_latent_frames (int, optional): The length of the sequence prefix, to be handled
                 separately. Defaults to 2.
             prefix_latents_mode (str, optional): Special treatment for prefix (boundary) latents.
@@ -1501,10 +1455,10 @@ class LTXVideoPipeline(DiffusionPipeline):
             init_latents[:, :, f_l_start:f_l_end] = torch.lerp(
                 init_latents[:, :, f_l_start:f_l_end],
                 latents[:, :, f_l_p:],
-                strength,
+                strength[f_l_p:],
             )
             # Mark these latent frames as conditioning latents
-            conditioning_latent_frames_mask[:, f_l_start:f_l_end] = strength
+            conditioning_latent_frames_mask[:, f_l_start:f_l_end] = strength[f_l_p:]
 
         # Handle the prefix-latents
         if prefix_latents_mode == "soft":
@@ -1512,14 +1466,16 @@ class LTXVideoPipeline(DiffusionPipeline):
                 # Drop the first (single-frame) latent and soft-condition the remaining prefix
                 f_l_start = media_frame_number // 8 + 1
                 f_l_end = f_l_start + f_l_p - 1
-                strength = min(prefix_soft_conditioning_strength, strength)
+                strength = torch.min(strength, prefix_soft_conditioning_strength)
                 init_latents[:, :, f_l_start:f_l_end] = torch.lerp(
                     init_latents[:, :, f_l_start:f_l_end],
                     latents[:, :, 1:f_l_p],
-                    strength,
+                    strength[1:f_l_p],
                 )
                 # Mark these latent frames as conditioning latents
-                conditioning_latent_frames_mask[:, f_l_start:f_l_end] = strength
+                conditioning_latent_frames_mask[:, f_l_start:f_l_end] = strength[
+                    1:f_l_p
+                ]
             latents = None  # No more latents to handle
         elif prefix_latents_mode == "drop":
             # Drop the prefix latents
