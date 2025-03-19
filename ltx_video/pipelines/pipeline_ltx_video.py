@@ -258,6 +258,9 @@ class LTXVideoPipeline(DiffusionPipeline):
         )
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 
+        self.cached_latents = None
+        self.cached_conditioning_mask = None
+
     def mask_text_embeddings(self, emb, mask):
         if emb.shape[0] == 1:
             keep_index = mask.sum().item()
@@ -823,11 +826,23 @@ class LTXVideoPipeline(DiffusionPipeline):
         # 4. Prepare latents.
         latent_height = height // self.vae_scale_factor
         latent_width = width // self.vae_scale_factor
-        latents = self.cached_latents
-        pixel_coords = self.cached_pixel_coords
-        conditioning_mask = self.cached_conditioning_mask
-        num_cond_latents = self.cached_num_cond_latents
+
+        latents, pixel_coords = self.patchifier.patchify(latents=self.cached_latents)
+        pixel_coords = latent_to_pixel_coords(
+            pixel_coords,
+            self.vae,
+            causal_fix=self.transformer.config.causal_temporal_positioning,
+        )
         init_latents = latents.clone()  # Used for image_cond_noise_update
+
+        num_cond_latents = 0
+        if self.cached_conditioning_mask is None:
+            conditioning_mask = None
+        else:
+            conditioning_mask, _ = self.patchifier.patchify(
+                latents=self.cached_conditioning_mask
+            )
+            conditioning_mask = conditioning_mask.squeeze(-1)
 
         pixel_coords = torch.cat([pixel_coords] * num_conds)
         orig_conditioning_mask = conditioning_mask
@@ -1034,6 +1049,13 @@ class LTXVideoPipeline(DiffusionPipeline):
         else:
             image = latents
 
+        self.cached_latents = latents
+        self.cached_conditioning_mask = torch.ones(
+            (latents.shape[0], 1, latents.shape[2], latents.shape[3], latents.shape[4]),
+            dtype=torch.float32,
+            device=latents.device,
+        )
+
         # Offload all models
         self.maybe_free_model_hooks()
 
@@ -1198,6 +1220,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         offload_to_cpu: bool = False,
         enhance_prompt: bool = False,
         text_encoder_max_tokens: int = 256,
+        pop_latents: Optional[int] = None,
         **kwargs,
     ):
         device = self._execution_device
@@ -1230,30 +1253,62 @@ class LTXVideoPipeline(DiffusionPipeline):
         )
 
         # Prepare the initial random latents tensor, shape = (b, c, f, h, w)
-        latents = self.prepare_latents(
-            latent_shape=latent_shape,
-            dtype=prompt_embeds_batch.dtype,
-            device=device,
+        if self.cached_latents is None:
+            latents = self.prepare_latents(
+                latent_shape=latent_shape,
+                dtype=prompt_embeds_batch.dtype,
+                device=device,
+                generator=generator,
+            )
+        else:
+            latents = self.cached_latents
+
+        if self.cached_conditioning_mask is None:
+            conditioning_mask = torch.zeros(
+                (latent_shape[0], 1, latent_shape[2], latent_shape[3], latent_shape[4]),
+                dtype=torch.float32,
+                device=latents.device,
+            )
+        else:
+            conditioning_mask = self.cached_conditioning_mask
+
+        if pop_latents is not None:
+            latents[:, :, :-pop_latents] = latents[:, :, pop_latents:].clone()
+            latents[:, :, -pop_latents:] = self.prepare_latents(
+                latent_shape=(
+                    latent_shape[0],
+                    latent_shape[1],
+                    pop_latents,
+                    latent_shape[3],
+                    latent_shape[4],
+                ),
+                dtype=prompt_embeds_batch.dtype,
+                device=device,
+                generator=generator,
+            )
+            conditioning_mask[:, :, :-pop_latents] = conditioning_mask[
+                :, :, pop_latents:
+            ].clone()
+            conditioning_mask[:, :, -pop_latents:] = torch.zeros(
+                (latent_shape[0], 1, pop_latents, latent_shape[3], latent_shape[4]),
+                dtype=torch.float32,
+                device=latents.device,
+            )
+
+        # Update the latents with the conditioning items and patchify them into (b, n, c)
+        latents, conditioning_mask = self.prepare_conditioning(
+            conditioning_items=conditioning_items,
+            init_latents=latents,
+            init_conditioning_mask=conditioning_mask,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            vae_per_channel_normalize=vae_per_channel_normalize,
             generator=generator,
         )
 
-        # Update the latents with the conditioning items and patchify them into (b, n, c)
-        latents, pixel_coords, conditioning_mask, num_cond_latents = (
-            self.prepare_conditioning(
-                conditioning_items=conditioning_items,
-                init_latents=latents,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                vae_per_channel_normalize=vae_per_channel_normalize,
-                generator=generator,
-            )
-        )
-
         self.cached_latents = latents
-        self.cached_pixel_coords = pixel_coords
         self.cached_conditioning_mask = conditioning_mask
-        self.cached_num_cond_latents = num_cond_latents
 
     def denoising_step(
         self,
@@ -1292,6 +1347,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         self,
         conditioning_items: Optional[List[ConditioningItem]],
         init_latents: torch.Tensor,
+        init_conditioning_mask: torch.Tensor,
         num_frames: int,
         height: int,
         width: int,
@@ -1330,18 +1386,9 @@ class LTXVideoPipeline(DiffusionPipeline):
         """
         assert isinstance(self.vae, CausalVideoAutoencoder)
 
-        latent_height = height // self.vae_scale_factor
-        latent_width = width // self.vae_scale_factor
+        conditioning_mask = init_conditioning_mask
 
         if conditioning_items:
-            batch_size, _, num_latent_frames = init_latents.shape[:3]
-            # Initialize the conditioning mask
-            conditioning_latent_frames_mask = torch.zeros(
-                (batch_size, 1, num_latent_frames, latent_height, latent_width),
-                dtype=torch.float32,
-                device=init_latents.device,
-            )
-
             # Process each conditioning item
             for conditioning_item in conditioning_items:
                 media_item = conditioning_item.media_item
@@ -1370,16 +1417,16 @@ class LTXVideoPipeline(DiffusionPipeline):
                     init_latents[:, :, :f_l] = torch.lerp(
                         init_latents[:, :, :f_l], latents, strength
                     )
-                    conditioning_latent_frames_mask[:, :, :f_l] = strength
+                    conditioning_mask[:, :, :f_l] = strength
                 else:
                     # Non-first frame or sequence
                     if n_frames > 1:
                         # Handle non-first sequence.
                         # Encoded latents are either fully consumed, or the prefix is handled separately below.
-                        init_latents, conditioning_latent_frames_mask, latents = (
+                        init_latents, conditioning_mask, latents = (
                             self._handle_non_first_conditioning_sequence(
                                 init_latents,
-                                conditioning_latent_frames_mask,
+                                conditioning_mask,
                                 latents,
                                 media_frame_number,
                                 strength,
@@ -1391,31 +1438,15 @@ class LTXVideoPipeline(DiffusionPipeline):
                     if latents is not None:  # Single frame or sequence-prefix latents
                         raise Exception("This prefix_latents_mode is not supported")
 
-        # Patchify the updated latents and calculate their pixel coordinates
-        init_latents, init_latent_coords = self.patchifier.patchify(
-            latents=init_latents
-        )
-        init_pixel_coords = latent_to_pixel_coords(
-            init_latent_coords,
-            self.vae,
-            causal_fix=self.transformer.config.causal_temporal_positioning,
-        )
-
-        patchified_conditioning_mask, _ = self.patchifier.patchify(
-            latents=conditioning_latent_frames_mask
-        )
-
         return (
             init_latents,
-            init_pixel_coords,
-            patchified_conditioning_mask.squeeze(-1),
-            0,
+            conditioning_mask,
         )
 
     @staticmethod
     def _handle_non_first_conditioning_sequence(
         init_latents: torch.Tensor,
-        conditioning_latent_frames_mask: torch.Tensor,
+        conditioning_mask: torch.Tensor,
         latents: torch.Tensor,
         media_frame_number: int,
         strength: torch.Tensor,
@@ -1429,7 +1460,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         (or last) sequence in a longer video.
         Args:
             init_latents (torch.Tensor): The initial noise latents to be updated.
-            conditioning_latent_frames_mask (torch.Tensor): A mask indicating the conditioning-strength of each
+            conditioning_mask (torch.Tensor): A mask indicating the conditioning-strength of each
                 latent token.
             latents (torch.Tensor): The encoded conditioning item.
             media_frame_number (int): The target frame number of the first frame in the conditioning sequence.
@@ -1458,7 +1489,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                 strength[f_l_p:],
             )
             # Mark these latent frames as conditioning latents
-            conditioning_latent_frames_mask[:, f_l_start:f_l_end] = strength[f_l_p:]
+            conditioning_mask[:, f_l_start:f_l_end] = strength[f_l_p:]
 
         # Handle the prefix-latents
         if prefix_latents_mode == "soft":
@@ -1473,9 +1504,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                     strength[1:f_l_p],
                 )
                 # Mark these latent frames as conditioning latents
-                conditioning_latent_frames_mask[:, f_l_start:f_l_end] = strength[
-                    1:f_l_p
-                ]
+                conditioning_mask[:, f_l_start:f_l_end] = strength[1:f_l_p]
             latents = None  # No more latents to handle
         elif prefix_latents_mode == "drop":
             # Drop the prefix latents
@@ -1485,7 +1514,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             latents = latents[:, :, :f_l_p]
         else:
             raise ValueError(f"Invalid prefix_latents_mode: {prefix_latents_mode}")
-        return init_latents, conditioning_latent_frames_mask, latents
+        return init_latents, conditioning_mask, latents
 
     def trim_conditioning_sequence(
         self, start_frame: int, sequence_num_frames: int, target_num_frames: int
