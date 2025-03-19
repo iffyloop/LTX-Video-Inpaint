@@ -260,6 +260,7 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         self.cached_latents = None
         self.cached_conditioning_mask = None
+        self.cached_image = None
 
     def mask_text_embeddings(self, emb, mask):
         if emb.shape[0] == 1:
@@ -1046,8 +1047,12 @@ class LTXVideoPipeline(DiffusionPipeline):
             )
             image = self.image_processor.postprocess(image, output_type=output_type)
 
+            self.cached_image = image
+
         else:
             image = latents
+
+            self.cached_image = None
 
         self.cached_latents = latents
         self.cached_conditioning_mask = torch.ones(
@@ -1273,7 +1278,15 @@ class LTXVideoPipeline(DiffusionPipeline):
             conditioning_mask = self.cached_conditioning_mask
 
         if pop_latents is not None:
+            first_frame = vae_encode(
+                self.cached_image[:, :, (pop_latents * 8) : (pop_latents * 8 + 1), :, :]
+                * 2.0
+                - 1.0,
+                self.vae,
+                vae_per_channel_normalize=vae_per_channel_normalize,
+            ).to(dtype=self.transformer.dtype)
             latents[:, :, :-pop_latents] = latents[:, :, pop_latents:].clone()
+            latents[:, :, 0] = first_frame[:, :, 0]
             latents[:, :, -pop_latents:] = self.prepare_latents(
                 latent_shape=(
                     latent_shape[0],
